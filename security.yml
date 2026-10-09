@@ -1,0 +1,32 @@
+name: Security checks
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 1"  # weekly, so new CVEs in dependencies are caught even without commits
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+      - name: Install scanners
+        run: python -m pip install bandit pip-audit zizmor
+      - name: SAST (Bandit, medium+ severity fails the build)
+        run: bandit -r yq --severity-level medium
+      - name: Dependency CVEs (pip-audit, runtime dependencies only)
+        run: |
+          python -m pip install .
+          python -m pip freeze --exclude yq > /tmp/runtime-deps.txt
+          pip-audit --no-deps --disable-pip -r /tmp/runtime-deps.txt
+      - name: Workflow security lint (zizmor)
+        run: zizmor --min-severity medium .github

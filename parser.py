@@ -1,0 +1,208 @@
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+
+try:
+    from .version import version as __version__
+except ImportError:
+    __version__ = "0.0.0"
+
+# These output options conflict with the JSON records used for conversion.
+jq_output_arg_spec = {
+    "--indent": 1,
+    "--tab": 0,
+    "--seq": 0,
+    "--raw-output0": 0,
+    "--raw-output": 0,
+    "-r": 0,
+    "--join-output": 0,
+    "-j": 0,
+    "--color-output": 0,
+    "-C": 0,
+}
+
+# Argparse needs the other short options to handle mixed clusters such as -rc;
+# unrelated long options pass through. Options with operands must be known to
+# avoid mistaking their values for our positionals.
+jq_arg_spec: dict[str, int | str] = {
+    **jq_output_arg_spec,
+    "--compact-output": 0,
+    "-c": 0,
+    "--monochrome-output": 0,
+    "-M": 0,
+    "-S": 0,
+    "-a": 0,
+    "--null-input": 0,
+    "-n": 0,
+    "-R": 0,
+    "-s": 0,
+    "-e": 0,
+    "-b": 0,
+    "-V": 0,
+    "-f": 0,
+    "--from-file": 0,
+    "-L": 1,
+    "--library-path": 1,
+    "--arg": 2,
+    "--argjson": 2,
+    "--slurpfile": 2,
+    "--argfile": 2,
+    "--rawfile": 2,
+    "--args": argparse.REMAINDER,
+    "--jsonargs": argparse.REMAINDER,
+}
+
+
+class JQArgumentAction(argparse.Action):
+    """Keep jq options and their operands in command-line order."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        if namespace.jq_options is None:
+            namespace.jq_options = []
+        namespace.jq_options.append((option_string, values))
+
+
+class Parser(argparse.ArgumentParser):
+    def print_help(self, *args, **kwargs):
+        yq_help = argparse.ArgumentParser.format_help(self).splitlines()
+        print("\n".join([f"usage: {self.prog} [options] <jq filter> [input file...]"] + yq_help[2:] + [""]))
+        sys.stdout.flush()
+        try:
+            subprocess.check_call(["jq", "--help"])
+        except Exception:
+            pass
+
+
+class VersionAction(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        print(f"{parser.prog} {__version__}")
+        try:
+            jq_version = subprocess.check_output(["jq", "--version"], stderr=subprocess.STDOUT, text=True)
+            print(jq_version, end="" if jq_version.endswith("\n") else "\n")
+        except Exception as error:
+            print(f"jq version could not be determined: {error}")
+        parser.exit()
+
+
+def get_parser(program_name, description):
+    # By default suppress these help strings and only enable them in the specific programs.
+    yaml_output_help, yaml_roundtrip_help, width_help, indentless_help, grammar_help = [argparse.SUPPRESS] * 5
+    explicit_start_help, explicit_end_help = [argparse.SUPPRESS] * 2
+    xml_output_help, xml_item_depth_help, xml_dtd_help, xml_root_help, xml_force_list_help = [argparse.SUPPRESS] * 5
+    xml_short_empty_elements_help = argparse.SUPPRESS
+    toml_output_help = toml_roundtrip_help = argparse.SUPPRESS
+
+    if program_name == "yq":
+        current_language = "YAML"
+        yaml_output_help = "Transcode jq JSON output back into YAML and emit it"
+        yaml_roundtrip_help = (
+            "Transcode jq JSON output back into YAML and emit it. "
+            "Preserve YAML tags and styles by representing them as extra items "
+            "in their enclosing mappings and sequences while in JSON. This option "
+            "is incompatible with jq filters that do not expect these extra items."
+        )
+        width_help = "When using --yaml-output, specify string wrap width (0 disables wrapping)"
+        indentless_help = "When using --yaml-output, indent block style lists (sequences) with 0 spaces instead of 2"
+        grammar_help = (
+            "When using --yaml-output, specify output grammar (the default is 1.1 and will be changed "
+            "to 1.2 in a future version). Setting this to 1.2 will cause strings like 'on' and 'no' to be "
+            "emitted unquoted."
+        )
+        explicit_start_help = 'When using --yaml-output, always emit explicit document start ("---")'
+        explicit_end_help = 'When using --yaml-output, always emit explicit document end ("...")'
+    elif program_name == "xq":
+        current_language = "XML"
+        xml_output_help = "Transcode jq JSON output back into XML and emit it"
+        xml_item_depth_help = "Specify depth of items to emit (default 0; use a positive integer to stream large docs)"
+        xml_dtd_help = "Preserve XML Document Type Definition (disables streaming of multiple docs)"
+        xml_root_help = "When transcoding back to XML, envelope the output in an element with this name"
+        xml_force_list_help = "Emit a list for elements with this name even if they occur only once (option can repeat)"
+        xml_short_empty_elements_help = "When transcoding back to XML, emit empty tags as self-closing tags"
+    elif program_name == "tomlq":
+        current_language = "TOML"
+        toml_output_help = "Transcode jq JSON output back into TOML and emit it"
+        toml_roundtrip_help = (
+            "Transcode jq JSON output back into TOML and emit it. Preserve TOML comments, whitespace, "
+            "and other formatting metadata by representing them as extra items while in JSON."
+        )
+    else:
+        raise ValueError("Unknown program name")
+
+    description = description.replace("yq", program_name).replace("YAML", current_language)
+    parser_args = {"prog": program_name, "description": description, "formatter_class": argparse.RawTextHelpFormatter}
+    parser_args.update(allow_abbrev=False)  # required to disambiguate options listed in jq_arg_spec
+    parser = Parser(**parser_args)
+    parser.add_argument("--output-format", default="json", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--yaml-output",
+        "--yml-output",
+        "-y",
+        dest="output_format",
+        action="store_const",
+        const="yaml",
+        help=yaml_output_help,
+    )
+    parser.add_argument(
+        "--yaml-roundtrip",
+        "--yml-roundtrip",
+        "-Y",
+        dest="output_format",
+        action="store_const",
+        const="annotated_yaml",
+        help=yaml_roundtrip_help,
+    )
+    parser.add_argument(
+        "--yaml-output-grammar-version", "--yml-out-ver", choices=["1.1", "1.2"], default="1.1", help=grammar_help
+    )
+    parser.add_argument("--width", "-w", type=int, help=width_help)
+    parser.add_argument("--indentless-lists", "--indentless", action="store_true", help=indentless_help)
+    parser.add_argument("--explicit-start", action="store_true", help=explicit_start_help)
+    parser.add_argument("--explicit-end", action="store_true", help=explicit_end_help)
+    parser.add_argument(
+        "--yaml-frontmatter",
+        "-F",
+        action="store_true",
+        help=(
+            "Process only the first YAML document; with -y/-Y, pass through the remaining text unchanged"
+            if program_name == "yq"
+            else argparse.SUPPRESS
+        ),
+    )
+    parser.add_argument("--no-expand-aliases", action="store_false", dest="expand_aliases", help=argparse.SUPPRESS)
+    parser.add_argument("--max-expansion-factor", type=int, default=1024, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--xml-output", "-x", dest="output_format", action="store_const", const="xml", help=xml_output_help
+    )
+    parser.add_argument("--xml-item-depth", type=int, default=0, help=xml_item_depth_help, metavar="123")
+    parser.add_argument("--xml-dtd", action="store_true", help=xml_dtd_help)
+    parser.add_argument("--xml-root", help=xml_root_help)
+    parser.add_argument("--xml-force-list", action="append", help=xml_force_list_help, metavar="ELT")
+    parser.add_argument("--xml-short-empty-elements", action="store_true", help=xml_short_empty_elements_help)
+    parser.add_argument(
+        "--toml-output", "-t", dest="output_format", action="store_const", const="toml", help=toml_output_help
+    )
+    parser.add_argument(
+        "--toml-roundtrip",
+        "-T",
+        dest="output_format",
+        action="store_const",
+        const="annotated_toml",
+        help=toml_roundtrip_help,
+    )
+    parser.add_argument("--in-place", "-i", action="store_true", help="Edit files in place (no backup - use caution)")
+    parser.add_argument(
+        "--version",
+        action=VersionAction,
+        nargs=0,
+        dest=argparse.SUPPRESS,
+        help="show the versions of %(prog)s and jq and exit",
+    )
+
+    for arg, nargs in jq_arg_spec.items():
+        parser.add_argument(arg, nargs=nargs, dest="jq_options", action=JQArgumentAction, help=argparse.SUPPRESS)
+
+    parser.add_argument("jq_filter", nargs="?")
+    parser.add_argument("input_streams", nargs="*", metavar="files", default=[])
+    return parser

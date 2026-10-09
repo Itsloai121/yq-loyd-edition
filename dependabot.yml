@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # Keeps the SHA-pinned actions current (the "# vX.Y.Z" comments are updated too).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7  # skip brand-new releases (typosquat / hijack window)
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7  # skip brand-new releases (typosquat / hijack window)

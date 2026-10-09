@@ -1,0 +1,2 @@
+# Force LF so a Windows checkout/zip no longer shows every file as modified.
+* text=auto eol=lf
